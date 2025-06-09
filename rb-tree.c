@@ -1,1299 +1,555 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <unistd.h>
+#include <unistd.h> // sleepのため (randominputでコメントアウトされているが残す)
 
-int global_key = 0;
-typedef struct Node
-{
-    // black:0 red:1
-    int color;
+// 色の定義
+#define RED 1
+#define BLACK 0
+
+typedef struct Node {
+    int color;          // RED または BLACK
     int data;
     struct Node *parent;
     struct Node *left;
     struct Node *right;
 } Node;
 
-// プロトタイプ宣言
-Node *left(Node *root);
-Node *right(Node *root);
-void printTreeGUI(Node *root, int level);
-int isrbt(Node *root);
-void numbering(Node *node);
+// プロトタイプ宣言 (一部変更・追加)
+Node *createNode(int data);
+Node *leftRotate(Node *root_of_subtree, Node **root_of_tree); // ツリー全体のrootも渡すように変更
+Node *rightRotate(Node *root_of_subtree, Node **root_of_tree);
+void fixAfterInsert(Node **root, Node *newNode);
+void printTreeGUI(Node *node, int level);
+int getBlackHeight(Node *node); // isrbt のためのヘルパー
+int checkRBTProperties(Node *root); // isrbt をより包括的に
+Node* bstInsert(Node* root, Node* pt); // BSTとしての挿入
+Node* deleteNode(Node **rootRef, int data); // ダブルポインタでルートの変更に対応
+void fixAfterDelete(Node **rootRef, Node *x, Node *x_parent);
+Node* treeMinimum(Node* node);
+void transplant(Node **rootRef, Node *u, Node *v); // 削除用ヘルパー
 
-Node *change1(Node *a)
-{
-    Node *b, *c;
-    b = a->left;
-    c = a->parent;
-
-    a = right(c);
-    b->color = 0;
-
-    return a;
-}
-Node *change2(Node *a)
-{
-    Node *b, *c;
-    b = a->left;
-    c = a->parent;
-
-    b = right(a);
-    c->right = b;
-    b->parent = c;
-
-    b = left(c);
-    a->color = 0;
-
-    return b;
-}
-Node *change3(Node *a)
-{
-    Node *b, *c;
-    b = a->right;
-    c = a->parent;
-
-    b = left(a);
-    c->left = b;
-    b->parent = c;
-
-    b = right(c);
-    a->color = 0;
-
-    return b;
+// 新しいノードを作成
+Node *createNode(int data) {
+    Node *newNode = (Node *)malloc(sizeof(Node));
+    if (newNode == NULL) {
+        perror("Failed to allocate memory for new node");
+        exit(EXIT_FAILURE);
+    }
+    newNode->data = data;
+    newNode->color = RED; // 新規ノードは常に赤
+    newNode->left = NULL;
+    newNode->right = NULL;
+    newNode->parent = NULL;
+    return newNode;
 }
 
-Node *change4(Node *a)
-{
-    Node *b, *c;
-    b = a->right;
-    c = a->parent;
-
-    a = left(c);
-    b->color = 0;
-    return a;
+Node *leftRotate(Node *x, Node **root_of_tree) {
+    Node *y = x->right;
+    x->right = y->left;
+    if (y->left != NULL) {
+        y->left->parent = x;
+    }
+    y->parent = x->parent;
+    if (x->parent == NULL) {
+        *root_of_tree = y;
+    } else if (x == x->parent->left) {
+        x->parent->left = y;
+    } else {
+        x->parent->right = y;
+    }
+    y->left = x;
+    x->parent = y;
+    return y; // 新しい部分木の根
 }
 
-Node *correctTree(Node *n)
-{
-    int det = 0;
-    int data = 0;
+Node *rightRotate(Node *y, Node **root_of_tree) {
+    Node *x = y->left;
+    y->left = x->right;
+    if (x->right != NULL) {
+        x->right->parent = y;
+    }
+    x->parent = y->parent;
+    if (y->parent == NULL) {
+        *root_of_tree = x;
+    } else if (y == y->parent->left) {
+        y->parent->left = x;
+    } else {
+        y->parent->right = x;
+    }
+    x->right = y;
+    y->parent = x;
+    return x; // 新しい部分木の根
+}
 
-    while (1)
-    {
-        if (n->parent == NULL)
-        {
-            return n;
-        }
 
-        //  赤ノードの親が赤ノードだった場合
-        if (det == 1 && n->color == 1)
-        {
-            int a, b, c;
-            b = data;
-            a = n->data;
+void fixAfterInsert(Node **root, Node *z) {
+    Node *parent_z = NULL;
+    Node *grand_parent_z = NULL;
 
-            // nの親が根ノードなら、黒にして終了
-            if ((n->parent)->parent == NULL)
-            {
-                // cの親を保存
-                Node *parent;
-                parent = (n)->parent;
-                c = (parent)->data;
-                // 変形した木をどっち側にくっつける？
-                int isRight = 0;
-                // left:0 rigth:1
-                if (parent->right == n)
-                {
-                    isRight = 1;
+    while ((z != *root) && (z->color == RED) && (z->parent != NULL && z->parent->color == RED)) {
+        parent_z = z->parent;
+        grand_parent_z = z->parent->parent; // 親が赤なら祖父は必ず存在するはず(ルートが黒なので)
+
+        // 親が祖父の左の子の場合
+        if (parent_z == grand_parent_z->left) {
+            Node *uncle_z = grand_parent_z->right;
+
+            // Case 1: 叔父が赤色
+            if (uncle_z != NULL && uncle_z->color == RED) {
+                grand_parent_z->color = RED;
+                parent_z->color = BLACK;
+                uncle_z->color = BLACK;
+                z = grand_parent_z; // 祖父を新たなzとしてチェックを続ける
+            } else { // 叔父が黒色 (NULLも黒として扱う)
+                // Case 2: zが右の子 (くの字型) -> 左回転で直線型にする
+                if (z == parent_z->right) {
+                    z = parent_z;
+                    leftRotate(z, root); // zは回転前の親の位置に来る
+                    parent_z = z->parent; // zの親を更新
                 }
-
-                // パターンの判定
-                // それぞれのパターンに対して木を変形
-                if (b < a && a < c)
-                {
-                    n = change1(n);
-                }
-                if (c < b && b < a)
-                {
-                    n = change2(n);
-                }
-                if (a < b && b < c)
-                {
-                    n = change3(n);
-                }
-                if (c < a && a < b)
-                {
-                    n = change4(n);
-                }
-                n->color = 0;
-                return (n);
-            }
-            c = (n->parent)->data;
-
-            // cの親を保存
-            Node *parent;
-            parent = (n->parent)->parent;
-
-            // 変形した木をどっち側にくっつける？
-            int isRight = 0;
-            // left:0 rigth:1
-            if (parent->right == n->parent)
-            {
-                isRight = 1;
-            }
-
-            // パターンの判定
-            // それぞれのパターンに対して木を変形
-            if (b < a && a < c)
-            {
-                n = change1(n);
-
-                // 回転した木をくっつける
-                n->parent = parent;
-                if (isRight == 1)
-                    parent->right = n;
-                else
-                    parent->left = n;
-            }
-            if (c < b && b < a)
-            {
-                n = change2(n);
-                // 回転した木をくっつける
-                n->parent = parent;
-                if (isRight == 1)
-                    parent->right = n;
-                else
-                    parent->left = n;
-            }
-            if (a < b && b < c)
-            {
-                n = change3(n);
-
-                // 回転した木をくっつける
-                n->parent = parent;
-                if (isRight == 1)
-                    parent->right = n;
-                else
-                    parent->left = n;
-            }
-            if (c < a && a < b)
-            {
-                n = change4(n);
-
-                // 回転した木をくっつける
-                n->parent = parent;
-                if (isRight == 1)
-                    parent->right = n;
-                else
-                    parent->left = n;
+                // Case 3: zが左の子 (直線型)
+                if (parent_z != NULL) parent_z->color = BLACK; // NULLチェック追加
+                if (grand_parent_z != NULL) grand_parent_z->color = RED; // NULLチェック追加
+                if (grand_parent_z != NULL) rightRotate(grand_parent_z, root);
+                // z = parent_z; // この操作で z (またはその部分木の新しい根)が上に移動することが多い
+                               // ループの条件で z は *root ではないことがチェックされるので、
+                               // この時点で z が黒になればループは終了する。
+                               // 通常、Case3の後は修正完了。
+                               // ただし、上記のz=grand_parent_zのような伝播は発生しない。
+                               // CLRSの教科書では、Case3の後はループ終了となっていることが多い。
+                               // ここでは、zを更新せずにループ条件で自然に終了させるか、
+                               // 明示的にループを抜けるようにしてもよい。
+                               // 重要なのは、grand_parent_z の回転で構造が変わること。
+                               // ループの次の反復のために z を適切に設定する必要があるが、
+                               // 通常、このケースの後、木の特性は回復している。
+                               // 安全のため z を再設定するなら、回転後の新しい頂点を指すようにする。
+                               // しかし、教科書的な実装では、このパスの後は z が親を指すようにし、
+                               // 次のループ条件で終了することが多い。
+                               // ここでは、grand_parent_z が回転して下に移動するので、
+                               // z や parent_z の相対関係が変わる。
+                               // ループの先頭で z が *root でないか、色がREDか、親がREDかを見ている。
+                               // Case 3の修正で z の親はBLACKになるので、ループは終了するはず。
             }
         }
-        // det, dataの更新
-        det = n->color;
-        data = n->data;
+        // 親が祖父の右の子の場合 (上記と対称)
+        else {
+            Node *uncle_z = grand_parent_z->left;
 
-        // nを根方向に進める
-        if (n->parent != NULL)
-        {
-            n = n->parent;
-        }
-    }
-}
-
-void initNode(Node *root, int data)
-{
-    root->color = 1;
-    root->data = data;
-    root->left = NULL;
-    root->right = NULL;
-    root->parent = NULL;
-}
-
-Node *addNode(Node *root, int data)
-{
-    // 最初
-    if (global_key == 0)
-    {
-        initNode(root, data);
-        // 最初のノードの色は黒に変更される
-        root->color = 0;
-        global_key++;
-        return root;
-    }
-
-    // 2番目以降
-    Node *p;
-    p = root;
-
-    // 重複した場合
-    if (p->data == data)
-    {
-        printf("%dはあります。\n", data);
-        while (p->parent != NULL)
-        {
-            p = p->parent;
-        }
-        return p;
-    }
-
-    // 左に移動
-    if (p->data > data)
-    {
-        Node *parent;
-        parent = p;
-        p = p->left;
-
-        // 左に挿入
-        if (p == NULL)
-        {
-            Node *n = (Node *)malloc(sizeof(Node));
-            initNode(n, data);
-
-            n->parent = parent;
-            parent->left = n;
-
-            // 挿入した赤ノードの親が黒ノードなら条件を満たす
-            if (parent->color == 0)
-            {
-                while (n->parent != NULL)
-                    n = n->parent;
-
-                return n;
-            }
-            else
-            {
-                // 挿入した赤ノードから根に向かって、修正
-                Node *ret;
-                ret = correctTree(n);
-                return ret;
-            }
-        }
-        else
-            return addNode(p, data);
-    }
-
-    // 右側
-    if (p->data < data)
-    {
-        Node *parent;
-        parent = p;
-        p = p->right;
-
-        if (p == NULL)
-        {
-            Node *n = (Node *)malloc(sizeof(Node));
-            initNode(n, data);
-
-            n->parent = parent;
-            parent->right = n;
-
-            // 挿入した赤ノードの親が黒ノードなら条件を満たす
-            if (parent->color == 0)
-            {
-                while (n->parent != NULL)
-                {
-                    n = n->parent;
+            // Case 1: 叔父が赤色
+            if (uncle_z != NULL && uncle_z->color == RED) {
+                grand_parent_z->color = RED;
+                parent_z->color = BLACK;
+                uncle_z->color = BLACK;
+                z = grand_parent_z;
+            } else {
+                // Case 2: zが左の子 (くの字型) -> 右回転
+                if (z == parent_z->left) {
+                    z = parent_z;
+                    rightRotate(z, root);
+                    parent_z = z->parent;
                 }
-                return n;
-            }
-            else
-            {
-                // 挿入した赤ノードから根に向かって、修正
-                Node *ret;
-                ret = correctTree(n);
-                return ret;
+                // Case 3: zが右の子 (直線型)
+                if (parent_z != NULL) parent_z->color = BLACK;
+                if (grand_parent_z != NULL) grand_parent_z->color = RED;
+                if (grand_parent_z != NULL) leftRotate(grand_parent_z, root);
             }
         }
-        else
-            return addNode(p, data);
     }
+    (*root)->color = BLACK; // 常にルートは黒
 }
 
-Node *right(Node *root)
-{
-    Node *a, *b;
-    a = root;
-    b = a->left;
-    if (b->right != NULL)
-    {
-        // T2 について
-        a->left = b->right;
-        if (b->right != NULL)
-            (b->right)->parent = a;
+Node *addNode(Node **root, int data) {
+    Node *newNode = createNode(data);
 
-        // bについて
-        b->right = a;
-        b->parent = a->parent;
-
-        // aについて
-        a->parent = b;
-
-        return b;
+    if (*root == NULL) {
+        newNode->color = BLACK; // ルートノードは黒
+        *root = newNode;
+        return *root;
     }
-    else
-    // T2が存在しない
-    {
-        a->left = NULL;
 
-        // bについて
-        b->right = a;
-        b->parent = a->parent;
-
-        // aについて
-        a->parent = b;
-
-        return b;
+    // 通常のBST挿入
+    Node *current = *root;
+    Node *parent = NULL;
+    while (current != NULL) {
+        parent = current;
+        if (data < current->data) {
+            current = current->left;
+        } else if (data > current->data) {
+            current = current->right;
+        } else {
+            printf("%dは既に存在します。\n", data);
+            free(newNode); // 重複なので作成したノードを解放
+            return *root;  // 変更なし
+        }
     }
+
+    // 新しいノードを接続
+    newNode->parent = parent;
+    if (data < parent->data) {
+        parent->left = newNode;
+    } else {
+        parent->right = newNode;
+    }
+
+    // RBTのプロパティを修正
+    fixAfterInsert(root, newNode);
+    return *root; // 新しい (かもしれない) ルートを返す
 }
 
-Node *left(Node *root)
-{
-    Node *a, *b;
-    a = root;
-    b = a->right;
-    if (b->left != NULL)
-    {
-        a->right = b->left;
-        if (b->left != NULL)
-            (b->left)->parent = a;
-
-        b->left = a;
-        b->parent = a->parent;
-
-        a->parent = b;
-
-        return b;
-    }
-    else
-    {
-        a->right = NULL;
-
-        b->left = a;
-        b->parent = a->parent;
-
-        a->parent = b;
-
-        return b;
-    }
-}
-
-void printTreeGUI(Node *root, int level)
-{
-    if (root == NULL)
+void printTreeGUI(Node *node, int level) {
+    if (node == NULL)
         return;
 
-    printTreeGUI(root->right, level + 1);
+    printTreeGUI(node->right, level + 1);
 
-    // 出力開始
     for (int i = 0; i < level; i++)
         printf("         ");
 
     if (level > 0)
         printf("|----");
 
-    if (root->color == 0)
-    {
-        printf("\x1b[44m");
-        printf("%d", root->data);
-        printf("\x1b[0m");
-    }
-    else
-    {
-        printf("\x1b[41m");
-        printf("%d", root->data);
-        printf("\x1b[0m");
+    // 色の表示 (BLACK: 青背景, RED: 赤背景)
+    if (node->color == BLACK) {
+        printf("\x1b[44m%d\x1b[0m", node->data); // 青背景
+    } else {
+        printf("\x1b[41m%d\x1b[0m", node->data); // 赤背景
     }
 
     printf("[");
-    if (root->parent != NULL)
-    {
-        printf("P%d", (root->parent)->data);
-    }
-    if (root->left != NULL)
-    {
-        printf("L%d", (root->left)->data);
-    }
-    if (root->right != NULL)
-    {
-        printf("R%d", (root->right)->data);
-    }
+    if (node->parent != NULL) printf("P%d", node->parent->data);
+    if (node->left != NULL) printf("L%d", node->left->data);
+    if (node->right != NULL) printf("R%d", node->right->data);
     printf("]\n");
-    // 出力終了
 
-    printTreeGUI(root->left, level + 1);
+    printTreeGUI(node->left, level + 1);
 }
 
-Node *searchNode(Node *root, int data)
-{
-    while (1)
-    {
-        // 探索成功
-        if (root->data == data)
-        {
-            return root;
+Node *searchNode(Node *root, int data) {
+    Node *current = root;
+    while (current != NULL) {
+        if (data == current->data) {
+            return current;
+        } else if (data < current->data) {
+            current = current->left;
+        } else {
+            current = current->right;
         }
+    }
+    return NULL; // 見つからなかった
+}
 
-        int isStep = 0;
 
-        // rootを根方向に進める
-        if (root->left != NULL && root->data > data)
-        {
-            isStep++;
-            root = root->left;
-        }
-        if (root->right != NULL && root->data < data)
-        {
-            isStep++;
-            root = root->right;
-        }
-
-        // 探索失敗
-        if (isStep == 0)
-        {
-            return NULL;
-        }
+// --- 削除処理関連 (CLRSベースの考え方) ---
+// uをvで置き換えるヘルパー関数
+void transplant(Node **rootRef, Node *u, Node *v) {
+    if (u->parent == NULL) {
+        *rootRef = v;
+    } else if (u == u->parent->left) {
+        u->parent->left = v;
+    } else {
+        u->parent->right = v;
+    }
+    if (v != NULL) {
+        v->parent = u->parent;
     }
 }
 
-void search(Node *root)
-{
-    while (1)
-    {
-
-        int input = 0;
-        printf("search>>");
-        scanf("%d", &input);
-        // 終了条件
-        if (input == 0)
-            break;
-
-        if (searchNode(root, input) == NULL)
-            printf("探索失敗\n");
-        else
-        {
-            printf("%dの探索成功\n", searchNode(root, input)->data);
-        }
+Node* treeMinimum(Node* node) {
+    while (node != NULL && node->left != NULL) {
+        node = node->left;
     }
+    return node;
 }
 
-Node *maxleft(Node *x)
-{
-    Node *p;
-    p = x->left;
-    while (p->right != NULL)
-        p = p->right;
-    return p;
-}
 
-Node *returnRoot(Node *r)
-{
-    while (r->parent != NULL)
-        r = r->parent;
+// `fixAfterDelete` は非常に複雑です。ここでは基本的な構造のみ示します。
+// 完全な実装には教科書の詳細なケース分析が必要です。
+void fixAfterDelete(Node **rootRef, Node *x, Node *x_parent) {
+    // x: 削除されたノードの位置に入ったノード (NULLの場合もある)
+    // x_parent: xの親
+    // この関数は、xが二重黒 (double black) の状態を表す場合に呼ばれるイメージ
+    // (実際にはxがNULLで、その位置が二重黒を意味することが多い)
 
-    return r;
-}
-
-typedef enum Dir
-{
-    dirleft,
-    dirright
-} dir;
-
-Node *delfix(Node *r, dir direction)
-{
-    puts("delfix: now tree");
-    printTreeGUI(returnRoot(r), 0);
-
-    // 部分木が左にある
-    if (direction == dirleft)
-    {
-        // Node a,b,c,dを定義
-        Node *a = r;
-        Node *b = r->right;
-        Node *c = r->right->left;
-        Node *d = r->right->right;
-
-        // a,b,c,d の色によって定義
-        int a_color = a->color;
-        int b_color;
-        int c_color;
-        int d_color;
-
-        // NULLは黒として扱い、色で場合分けするため代入
-        if (b != NULL)
-            b_color = b->color;
-        else
-            b_color = 0;
-
-        if (c != NULL)
-            c_color = c->color;
-        else
-            c_color = 0;
-
-        if (d != NULL)
-            d_color = d->color;
-        else
-            d_color = 0;
-
-        // cが存在しない:-1 存在する:0 1ノードを持つ:1 2ノードを持つ:2
-        int c_num = -1;
-        // c,dの子供の数を数える
-        if (c != NULL)
-        {
-            c_num = 0;
-            if (c->left != NULL)
-                c_num++;
-            if (c->right != NULL)
-                c_num++;
-        }
-
-        // dも同様に扱う
-        int d_num = -1;
-        if (d != NULL)
-        {
-            d_num = 0;
-            if (d->left != NULL)
-                d_num++;
-            if (d->right != NULL)
-                d_num++;
-        }
-
-        // ちゃんと反映されてる？
-        printf("left r:%d\n", a->data);
-        printf("a%d b%d c%d d%d | c%d d%d\n", a_color, b_color, c_color, d_color, c_num, d_num);
-
-        // 4パターンに分類
-        // 1パターン目
-        if (b_color == 0 && c_color == 1 && d_color == 0)
-        {
-            puts("del 1pattern");
-            Node *p = right(b);
-            p = left(p->parent);
-            p->left->color = 0;
-            return returnRoot(a);
-        }
-        // 2パターン目
-        else if (b_color == 0 && c_color == 0 && d_color == 1)
-        {
-            puts("del 2pattern");
-            Node *a_parent;
-            if (a->parent != NULL)
-                a_parent = a->parent; //
-
-            Node *p = left(a);
-            p->color = 1;
-            p->left->color = 0;
-            p->right->color = 0;
-            if (a->parent != NULL)
-                a_parent->right = p; //
-            return returnRoot(a);
-        }
-        // 1,2 のどちらか
-        else if (b_color == 0 && c_color == 1 && d_color == 1)
-        {
-            // 1パターン目
-            if (c_num == 2)
-            {
-                puts("del 1pattern");
-                Node *p = right(b);
-                p = left(p->parent);
-                p->left->color = 0;
-                return returnRoot(a);
-            }
-            // 2パターン目
-            else if (d_num == 2)
-            {
-                puts("del 2pattern");
-                Node *a_parent;
-                if (a->parent != NULL)
-                    a_parent = a->parent; //
-                Node *p = left(a);
-                p->color = 1;
-                p->left->color = 0;
-                p->right->color = 0;
-                if (a->parent != NULL)
-                    a_parent->right = p; //
-                return returnRoot(a);
-            }
-        }
-        // 3パターン目
-        else if (a_color == 1 && b_color == 0 && c_color == 0 && d_color == 0)
-        {
-            puts("del 3pattern");
-            a->color = 0;
-            b->color = 1;
-            return returnRoot(a);
-        }
-        // 4パターン目
-        else if (a_color == 0 && b_color == 0 && c_color == 0 && d_color == 0)
-        {
-            puts("del 4pattern");
-            b->color = 1;
-            // aの親があるならば
-            if (a->parent != NULL)
-            {
-                // aの親から見て、aは右左どっち？
-                dir dir_from_a_parent;
-                if (a->parent->left == a)
-                    dir_from_a_parent = dirleft;
-                else
-                    dir_from_a_parent = dirright;
-
-                // 根方向へ再帰的に
-                delfix(a->parent, dir_from_a_parent);
-            }
-            return returnRoot(a);
-        }
-    }
-    // 部分木が右にある
-    else if (direction == dirright)
-    {
-        puts("dirright");
-        // Node a,b,c,dを定義
-        Node *a = r;
-        Node *b = r->left;
-        Node *c = r->left->right;
-        Node *d = r->left->left;
-
-        // a,b,c,d の色によって定義
-        int a_color = a->color;
-        int b_color;
-        int c_color;
-        int d_color;
-
-        // NULLは黒として扱い、色で場合分けするため代入
-        if (b != NULL)
-            b_color = b->color;
-        else
-            b_color = 0;
-
-        if (c != NULL)
-            c_color = c->color;
-        else
-            c_color = 0;
-
-        if (d != NULL)
-            d_color = d->color;
-        else
-            d_color = 0;
-
-        // cが存在しない:-1 存在する:0 1ノードを持つ:1 2ノードを持つ:2
-        int c_num = -1;
-        // c,dの子供の数を数える
-        if (c != NULL)
-        {
-            c_num = 0;
-            if (c->left != NULL)
-                c_num++;
-            if (c->right != NULL)
-                c_num++;
-        }
-
-        // dも同様に扱う
-        int d_num = -1;
-        if (d != NULL)
-        {
-            d_num = 0;
-            if (d->left != NULL)
-                d_num++;
-            if (d->right != NULL)
-                d_num++;
-        }
-
-        // ちゃんと反映されてる？
-        printf("right r:%d\n", a->data);
-        printf("a%d b%d c%d d%d | c%d d%d\n", a_color, b_color, c_color, d_color, c_num, d_num);
-
-        // 4パターンに分類
-        // 1パターン目
-        if (b_color == 0 && c_color == 1 && d_color == 0)
-        {
-            puts("del 1pattern");
-            Node *p = left(b);
-            p = right(p->parent);
-            p->right->color = 0;
-            return returnRoot(a);
-        }
-        // 2パターン目
-        else if (b_color == 0 && c_color == 0 && d_color == 1)
-        {
-            puts("del 2pattern");
-            Node *a_parent;
-            if (a->parent != NULL)
-                a_parent = a->parent; //
-
-            Node *p = right(a);
-            p->color = 1;
-            p->right->color = 0;
-            p->left->color = 0;
-            if (a->parent != NULL)
-                a_parent->left = p; //
-            return returnRoot(a);
-        }
-        // 1,2 のどちらか
-        else if (b_color == 0 && c_color == 1 && d_color == 1)
-        {
-            // 1パターン目
-            if (c_num == 2)
-            {
-                puts("del 1pattern");
-                Node *p = left(b);
-                p = right(p->parent);
-                p->right->color = 0;
-                return returnRoot(a);
-            }
-            // 2パターン目
-            else if (d_num == 2)
-            {
-                puts("del 2pattern");
-                Node *a_parent;
-                if (a->parent != NULL)
-                    a_parent = a->parent; //
-
-                Node *p = right(a);
-                p->color = 1;
-                p->right->color = 0;
-                p->left->color = 0;
-                if (a->parent != NULL)
-                    a_parent->left = p; //
-                return returnRoot(a);
-            }
-        }
-        // 3パターン目
-        else if (a_color == 1 && b_color == 0 && c_color == 0 && d_color == 0)
-        {
-            puts("del 3pattern");
-            a->color = 0;
-            b->color = 1;
-            return returnRoot(a);
-        }
-        // 4パターン目
-        else if (a_color == 0 && b_color == 0 && c_color == 0 && d_color == 0)
-        {
-            puts("del 4pattern");
-            b->color = 1;
-            // aの親があるならば
-            if (a->parent != NULL)
-            {
-                // aの親から見て、aは右左どっち？
-                dir dir_from_a_parent;
-                if (a->parent->left == a)
-                    dir_from_a_parent = dirleft;
-                else
-                    dir_from_a_parent = dirright;
-
-                // 根方向へ再帰的に
-                delfix(a->parent, dir_from_a_parent);
-            }
-            return returnRoot(a);
-        }
-    }
-}
-
-Node *deleteNode(Node *root, int data)
-{
-    // 削除対象をxとする
-    Node *x;
-
-    // xを探索し、探索成功したら終了
-    x = searchNode(root, data);
-    if (x == NULL)
-        return root;
-
-    // xの子の数を数える
-    int childNum = 0;
-    if (x->right != NULL)
-        childNum++;
-    if (x->left != NULL)
-        childNum++;
-
-    // xの子の個数で場合わけ
-
-    // xが葉の場合
-    if (childNum == 0)
-    {
-        // xが根ノードかつ葉ノードの場合
-        if (x->parent == NULL)
-            return NULL;
-
-        // xの親, xが親から見てdirを保存
-        Node *root = x->parent;
-        dir d;
-
-        // xはrootから見て左？右にいる？
-        if ((x->parent)->left == x)
-        {
-            (x->parent)->left = NULL;
-            d = dirleft;
-        }
-        else if ((x->parent)->right == x)
-        {
-            (x->parent)->right = NULL;
-            d = dirright;
-        }
-
-        // 修正が必要かどうかのフラグ
-        int isRBT = isrbt(returnRoot(root));
-
-        // 修正 xを削除しているので、黒が一つ足りない木はxの場所
-        if (isRBT == 0)
-        {
-            // xを部分木として、変形を行う
-            delfix(root, d);
-        }
-
-        // 変形されたら根ノードも変わるので、根っこを特定してから返す
-        return returnRoot(root);
-    }
-
-    // xが一つの子を持つ場合
-    if (childNum == 1)
-    {
-        int isRight = 0;
-        if (x->right != NULL)
-            isRight = 1;
-
-        // 左に子を持つ
-        if (isRight == 0)
-        {
-            // x が根ノードの場合
-            if (x->parent == NULL)
-            {
-                Node *left;
-                left = x->left;
-                left->parent = NULL;
-
-                //  根は必ず黒でなければならない
-                left->color = 0;
-                return left;
+    Node *sibling;
+    while (x != *rootRef && (x == NULL || x->color == BLACK)) {
+        if (x == x_parent->left) { // xが左の子の場合
+            sibling = x_parent->right;
+            if (sibling == NULL) { // 実際にはNIL葉を想定するので、兄弟がNULLはありえないはずだが、
+                                  // 簡単な実装ではNULLがありうる。その場合の処理が必要。
+                                  // ここでは兄弟が必ず存在すると仮定して進める。
+                x = x_parent; // 問題を上に伝播 (簡易的な処理)
+                if (x != *rootRef && x!=NULL) x_parent = x->parent; else break;
+                continue;
             }
 
-            // xが親を持つ場合
-            if (x->parent != NULL)
-            {
-                // 左の子ノードを覚えさせておく
-                Node *leftNode = x->left;
 
-                // 場合わけで使う色を定義しておく
-                int x_left_color;
-
-                if (x->left->color == 0)
-                    x_left_color = 0;
-                else
-                    x_left_color = 1;
-
-                // xの子の親を引き継ぐ
-                (x->left)->parent = x->parent;
-
-                dir dir_from_x_parent;
-                // xの親が、xを左にもつ？xを右に持つ？
-                if ((x->parent)->right == x)
-                {
-                    (x->parent)->right = x->left;
-                    dir_from_x_parent = dirright;
+            // Case 1: 兄弟が赤
+            if (sibling->color == RED) {
+                sibling->color = BLACK;
+                x_parent->color = RED;
+                leftRotate(x_parent, rootRef);
+                sibling = x_parent->right; // 新しい兄弟
+            }
+            // Case 2: 兄弟が黒、兄弟の両方の子が黒
+            if ((sibling->left == NULL || sibling->left->color == BLACK) &&
+                (sibling->right == NULL || sibling->right->color == BLACK)) {
+                sibling->color = RED;
+                x = x_parent; // 問題を親に移動
+                if (x != *rootRef && x != NULL) x_parent = x->parent; else break;
+            } else {
+                // Case 3: 兄弟が黒、兄弟の左の子が赤、右の子が黒
+                if (sibling->right == NULL || sibling->right->color == BLACK) {
+                    if (sibling->left != NULL) sibling->left->color = BLACK;
+                    sibling->color = RED;
+                    rightRotate(sibling, rootRef);
+                    sibling = x_parent->right; // 新しい兄弟
                 }
-                if ((x->parent)->left == x)
-                {
-                    (x->parent)->left = x->left;
-                    dir_from_x_parent = dirleft;
-                }
+                // Case 4: 兄弟が黒、兄弟の右の子が赤
+                sibling->color = x_parent->color;
+                x_parent->color = BLACK;
+                if (sibling->right != NULL) sibling->right->color = BLACK;
+                leftRotate(x_parent, rootRef);
+                x = *rootRef; // 修正完了、ループを抜ける
+            }
+        } else { // xが右の子の場合 (上記と対称)
+            sibling = x_parent->left;
+            if (sibling == NULL) {
+                x = x_parent;
+                if (x != *rootRef && x != NULL) x_parent = x->parent; else break;
+                continue;
+            }
 
-                // 修正の場合分け
-                if (x_left_color == 0)
-                {
-                    // xが黒ノードが一つ足りない部分木になる
-                    delfix(x->parent, dir_from_x_parent);
+            // Case 1
+            if (sibling->color == RED) {
+                sibling->color = BLACK;
+                x_parent->color = RED;
+                rightRotate(x_parent, rootRef);
+                sibling = x_parent->left;
+            }
+            // Case 2
+            if ((sibling->left == NULL || sibling->left->color == BLACK) &&
+                (sibling->right == NULL || sibling->right->color == BLACK)) {
+                sibling->color = RED;
+                x = x_parent;
+                 if (x != *rootRef && x != NULL) x_parent = x->parent; else break;
+            } else {
+                // Case 3
+                if (sibling->left == NULL || sibling->left->color == BLACK) {
+                    if (sibling->right != NULL) sibling->right->color = BLACK;
+                    sibling->color = RED;
+                    leftRotate(sibling, rootRef);
+                    sibling = x_parent->left;
                 }
-                else if (x_left_color == 1)
-                {
-                    // 昇格した後、色をred->blackに変更
-                    leftNode->color = 0;
-                }
+                // Case 4
+                sibling->color = x_parent->color;
+                x_parent->color = BLACK;
+                if (sibling->left != NULL) sibling->left->color = BLACK;
+                rightRotate(x_parent, rootRef);
+                x = *rootRef;
             }
         }
+    }
+    if (x != NULL) x->color = BLACK;
+}
 
-        // 右に子を持つ
-        if (isRight == 1)
-        {
-            // x が根ノードの場合
-            if (x->parent == NULL)
-            {
-                Node *right;
-                right = x->right;
-                right->parent = NULL;
 
-                // 根ノードは必ず黒ノードである
-                right->color = 0;
-                return right;
-            }
-
-            // xが親を持つ場合
-            if (x->parent != NULL)
-            {
-                // 右の子ノードを覚えさせておく
-                Node *rightNode = x->right;
-                // 場合わけで使う色を定義しておく
-                int x_right_color;
-
-                if (x->right->color == 0)
-                    x_right_color = 0;
-                else
-                    x_right_color = 1;
-
-                // xの子の親を引き継ぐ
-                (x->right)->parent = x->parent;
-
-                dir dir_from_x_parent;
-                // xの親が、xを左にもつ？xを右に持つ？
-                if ((x->parent)->right == x)
-                {
-                    (x->parent)->right = x->right;
-                    dir_from_x_parent = dirright;
-                }
-                if ((x->parent)->left == x)
-                {
-                    (x->parent)->left = x->right;
-                    dir_from_x_parent = dirleft;
-                }
-
-                // 修正の場合分け
-                if (x_right_color == 0)
-                {
-                    // xが黒ノードが一つ足りない部分木になる
-                    delfix(x->parent, dir_from_x_parent);
-                }
-                else if (x_right_color == 1)
-                {
-                    // 昇格した後、色をred->blackに変更
-                    rightNode->color = 0;
-                }
-            }
-        }
-        // xが親を持つ場合、グラフの根を返す
-        while (x->parent != NULL)
-            x = x->parent;
-
-        return x;
+Node* deleteNode(Node **rootRef, int data) {
+    Node *z = searchNode(*rootRef, data);
+    if (z == NULL) {
+        printf("%d は存在しません。\n", data);
+        return *rootRef;
     }
 
-    // xが2の子を持つ場合
-    if (childNum == 2)
-    {
-        Node *c;
-        // xと入れ替えるノード cの特定
-        if (x->left != NULL)
-            c = maxleft(x);
+    Node *y = z; // y: 実際に削除される(または移動する)ノード
+    Node *x = NULL; // x: yの位置に入るノード
+    Node *x_parent = NULL; // xの親
+    int y_original_color = y->color;
 
-        // 入れ替えるノードの表示
-        printf("translation Node: %d\n", c->data);
+    if (z->left == NULL) {
+        x = z->right;
+        x_parent = z->parent; // transplant前に親を記録
+        transplant(rootRef, z, z->right);
+    } else if (z->right == NULL) {
+        x = z->left;
+        x_parent = z->parent; // transplant前に親を記録
+        transplant(rootRef, z, z->left);
+    } else {
+        y = treeMinimum(z->right); // zの次節点
+        y_original_color = y->color;
+        x = y->right;
 
-        // cの親の場所を後で使う
-        // c->parentは必ず存在
-        // 削除対象x, 入れ替えるノードcの情報を記録->分岐
-        Node *c_parent;
-        if (c->parent != x)
-            c_parent = c->parent;
-        else if (c->parent == x)
-            c_parent = c;
-
-        printf("fix root Node: %d\n", c_parent->data);
-
-        // cは親から見てどっちにある？
-        dir dir_from_c_parent;
-        if (c->parent->left == c)
-            dir_from_c_parent = dirleft;
-        else if (c->parent->right == c)
-            dir_from_c_parent = dirright;
-
-        // dirの出力
-        if (dir_from_c_parent == dirleft)
-            printf("dirleft\n");
-        else
-            printf("dirright\n");
-
-        // x,c の色の保存
-        int x_color = x->color;
-        int c_color = c->color;
-
-        // どの変形がおこなわれる？
-        printf("x%d c%d \n", x_color, c_color);
-
-        // xは根ノードである
-        if (x->parent == NULL)
-        {
-
-            // x->right, x->left は必ず存在
-            (x->left)->parent = c;
-            (x->right)->parent = c;
-
-            // 追加
-            if (c->parent != x && c->left != NULL)
-                c->parent->right = c->left;
-            else if (c->parent != x)
-                c->parent->right = NULL;
-
-            c->parent = NULL;
-            c->right = x->right;
-            if (x->left != c)
-                c->left = x->left;
-
-            // 削除ノードxは必ず黒なのでチェックする必要はない
-            if (c_color == 0)
-            {
-                // cが黒ノードが足りない部分木となる,
-                delfix(c_parent, dir_from_c_parent);
-            }
-            else if (c_color == 1)
-            {
-                // 根ノードの色はかならず黒出なければならない
-                c->color = 0;
-            }
-
-            return returnRoot(c);
+        if (y->parent == z) {
+            if (x != NULL) x->parent = y; // xがNULLでない場合のみ親を設定
+            x_parent = y; // xの親はyになる
+        } else {
+            x_parent = y->parent; // xの親はyの元の親
+            transplant(rootRef, y, y->right);
+            y->right = z->right;
+            if (y->right != NULL) y->right->parent = y;
         }
+        transplant(rootRef, z, y);
+        y->left = z->left;
+        if (y->left != NULL) y->left->parent = y;
+        y->color = z->color;
+    }
 
-        // xが親を持つ
-        if (x->parent != NULL)
-        {
-            // x->right, x->left は必ず存在
-            (x->left)->parent = c;
-            (x->right)->parent = c;
+    free(z); // 元のzノードを解放
 
-            // 追加
-            if (c->parent != x && c->left != NULL)
-                c->parent->right = c->left;
-            else if (c->parent != x)
-                c->parent->right = NULL;
-
-            c->parent = x->parent;
-            c->right = x->right;
-            if (x->left != c)
-                c->left = x->left;
-
-            if (x->parent->left == x)
-                x->parent->left = c;
-            else if (x->parent->right == x)
-                x->parent->right = c;
-
-            // 変形
-            if (x_color == 1 && c_color == 1)
-            {
-                // 何もしないで終わり
+    if (y_original_color == BLACK) {
+        // x_parent は、xがNULLの場合でも、xが元々あった場所の親を指す必要がある。
+        // もしxがNULLでyがルートだった場合、x_parentもNULLになる可能性がある。
+        // fixAfterDeleteが呼ばれるのは、実際に黒ノードが失われた場合。
+        // x_parentがNULLになるケースは、削除されたのがルートで、かつその子がNULLの場合。
+        // この場合、ツリーが空になるか、新しいルートが赤なら黒にするだけで済む。
+        if (*rootRef != NULL) { // ツリーが空でなければ fixAfterDelete を考慮
+            if(x_parent == NULL && x != NULL) { // xが新しいルートになった場合
+                 x->color = BLACK; // 新しいルートは黒
+            } else if (x_parent != NULL) { // x_parent が存在するなら修正処理
+                 fixAfterDelete(rootRef, x, x_parent);
+            } else if (x == NULL && x_parent == NULL && *rootRef != NULL){
+                // 削除の結果ルートがNULLになったが、*rootRefはまだ何かを指している場合（これは通常起こらない）
+                // もしツリーが非NULLなら、ルートは黒でなければならない。
+                // *rootRef がNULLなら何もしない。
+                // if (*rootRef != NULL) (*rootRef)->color = BLACK; (fixAfterDelete内で対応)
             }
-            else if (x_color == 1 && c_color == 0)
-            {
-                // xが赤だったように、同じくcも赤にする
-                // cの場所で一つ足りなくなる
-                c->color = 1;
-                delfix(c_parent, dir_from_c_parent);
-            }
-            else if (x_color == 0 && c_color == 0)
-            {
-                // // cの場所で一つ足りなくなる
-                delfix(c_parent, dir_from_c_parent);
-            }
-            else if (x_color == 0 && c_color == 1)
-            {
-                // xが黒だったように、cを黒にして終わり
-                c->color = 0;
-            }
-
-            return returnRoot(c);
         }
+    }
+    return *rootRef;
+}
+
+// --- RBTプロパティ検証 (簡易版) ---
+// isrbtの簡易版。黒の高さが全てのパスで同じかを確認する。
+// ただし、これはRBTの全てのプロパティを網羅していない。
+int getBlackHeight(Node *node) {
+    if (node == NULL) return 1; // NIL葉は黒と数える
+    int leftHeight = getBlackHeight(node->left);
+    int rightHeight = getBlackHeight(node->right);
+    if (leftHeight == -1 || rightHeight == -1 || leftHeight != rightHeight) return -1; // 不整合
+    return (node->color == BLACK ? 1 : 0) + leftHeight;
+}
+
+int checkRBTProperties(Node *root) {
+    if (root == NULL) {
+        printf("Tree is empty. (Valid RBT)\n");
+        return 1;
+    }
+    if (root->color != BLACK) {
+        printf("RBT Property violated: Root is not black.\n");
+        return 0;
+    }
+    if (getBlackHeight(root) == -1) {
+        printf("RBT Property violated: Black height mismatch or other structural issue.\n");
+        return 0;
+    }
+    // TODO: ここにさらにプロパティ4 (赤ノードの子は黒) のチェックを追加できる
+    printf("RBT properties seem to be maintained (checked root color and black height).\n");
+    return 1;
+}
+
+
+// --- main関数とメニュー ---
+void search_ui(Node *root) {
+    int input = 0;
+    printf("search>>");
+    if (scanf("%d", &input) != 1) { // scanfの戻り値チェックを追加
+        printf("不正な入力です。\n");
+        // 不正な入力をクリアする処理 (オプション)
+        while (getchar() != '\n'); // 改行文字まで読み飛ばす
+        return;
+    }
+
+    if (input == 0) return;
+
+    Node* foundNode = searchNode(root, input); // searchNodeの結果を変数に格納
+    if (foundNode == NULL) {
+        printf("探索失敗: %dは見つかりませんでした。\n", input);
+    } else {
+        printf("%dの探索成功\n", foundNode->data); // 見つかったノードのデータを表示
     }
 }
 
-// 黒の要素数が格納される配列、添え字
-int black[256];
-int num;
+Node *add_ui(Node *root) { // 関数名変更
+    int input = 0;
+    printf("add>>");
+    scanf("%d", &input);
+    if (input == 0) return root;
 
-void numbering(Node *node)
-{
-    int b = 0;
-    // 葉ノードの色は黒？
-    if (node->color == 0)
-        b++;
-
-    // 内部ノードの色は黒？
-    while (node->parent != NULL)
-    {
-        node = node->parent;
-        if (node->color == 0)
-            b++;
-    }
-    // グローバル変数に書き込み
-    black[num] = b;
-    num++;
+    root = addNode(&root, input); // addNodeが新しいrootを返すように
+    printTreeGUI(root, 0);
+    checkRBTProperties(root);
+    return root;
 }
 
-void numblack(Node *node)
-{
-    // 左だけNULL
-    if (node->left == NULL && node->right != NULL)
-    {
-        numbering(node);
-        numblack(node->right);
-    }
-    // 右だけNULL
-    else if (node->left != NULL && node->right == NULL)
-    {
-        numbering(node);
-        numblack(node->left);
-    }
-    // 両方NULL
-    else if (node->left == NULL && node->right == NULL)
-    {
-        numbering(node);
-    }
-    // 両方NULLではない
-    else if (node->left != NULL && node->right != NULL)
-    {
-        numblack(node->right);
-        numblack(node->left);
-    }
-}
+Node *delete_ui(Node *root) { // 関数名変更
+    int input = 0;
+    printf("delete>>");
+    scanf("%d", &input);
+    if (input == 0) return root;
 
-int isrbt(Node *root)
-{
-    // 初期化
-    for (int i = 0; i < 256; i++)
-        black[i] = 0;
-    num = 0;
-
-    // 黒の要素数を数え上げる
-    numblack(root);
-
-    int isrbt = 1;
-
-    // isrbtかチェック
-    for (int i = 0; i < 256; i++)
-    {
-        if (black[i + 1] == 0)
-            break;
-        else if (black[i] != black[i + 1])
-        {
-            isrbt = 0;
-            break;
-        }
-    }
-
-    // 出力
-    if (isrbt == 0)
-        printf("rbt木ではありません。\n");
-    else
-        printf("rbt木です。\n");
-
-    // 初期化
-    for (int i = 0; i < 256; i++)
-        black[i] = 0;
-    num = 0;
-
-    return isrbt;
-}
-
-void delete(Node *root)
-{
-    while (1)
-    {
-        int input = 0;
-        printf("delete>>");
-        scanf("%d", &input);
-
-        if (input == 0)
-            break;
-
-        root = deleteNode(root, input);
-        if (root == NULL)
-        {
-            printf("NULLが帰ってきたため終了\n");
-            return;
-        }
-
+    root = deleteNode(&root, input);
+    if (root == NULL) {
+        printf("Tree is now empty.\n");
+    } else {
         printTreeGUI(root, 0);
-        isrbt(root);
     }
-
-    return;
+    checkRBTProperties(root);
+    return root;
 }
 
-Node *add(Node *root)
-{
-    while (1)
-    {
-        int input = 0;
-        printf("add>>");
-        scanf("%d", &input);
-        // 終了条件
-        if (input == 0)
-            return root;
-        else
-        {
-            root = addNode(root, input);
-            printTreeGUI(root, 0);
-            isrbt(root);
-        }
-    }
-}
-
-Node *randominput(Node *root)
-{
+Node *randominput_ui(Node *root) { // 関数名変更
     printf("insert number>>");
     int insertnum = 0;
     scanf("%d", &insertnum);
 
-    for (int i = 0; i < insertnum; i++)
-    {
-        // sleep(0.1);
-        // srand((unsigned int)time(NULL));
-        srand((unsigned int)i);
-        int insert_num = rand() % 100 + 1;
-        root = addNode(root, insert_num);
+    for (int i = 0; i < insertnum; i++) {
+        // sleep(1); // デバッグ用に遅延させる場合。time(NULL)の粒度のため
+        int val = rand() % 100 + 1;
+        printf("\nInserting %d:\n", val);
+        root = addNode(&root, val);
         printTreeGUI(root, 0);
-        isrbt(root);
+        checkRBTProperties(root);
     }
-
     return root;
 }
 
-int main()
-{
-    Node Tree;
-    Node *root;
-    root = &Tree;
 
-    int d = 1;
-    while (d)
-    {
-        printf("0:exit 1:add 2:search 3:delete 4:show 5:randominput\n");
+int main() {
+    Node *root = NULL; // 最初は空の木
+    srand((unsigned int)time(NULL)); // プログラム開始時に一度だけsrandを呼び出す
+
+    int choice = 1;
+    while (choice != 0) {
+        printf("\n0:exit 1:add 2:search 3:delete 4:show 5:randominput\n");
         printf("input>>");
-        scanf("%d", &d);
-        switch (d)
-        {
-        case 0:
-            d = 0;
-            break;
-        case 1:
-            root = add(root);
-            break;
-        case 2:
-            search(root);
-            break;
-        case 3:
-            delete (root);
-            break;
-        case 4:
-            printTreeGUI(root, 0);
-            isrbt(root);
-            break;
-        case 5:
-            root = randominput(root);
-            break;
-
-        default:
-            d = 0;
-            break;
+        scanf("%d", &choice);
+        switch (choice) {
+            case 0:
+                break;
+            case 1:
+                root = add_ui(root);
+                break;
+            case 2:
+                if (root) search_ui(root); else printf("Tree is empty.\n");
+                break;
+            case 3:
+                if (root) root = delete_ui(root); else printf("Tree is empty.\n");
+                break;
+            case 4:
+                if (root) printTreeGUI(root, 0); else printf("Tree is empty.\n");
+                if (root) checkRBTProperties(root); // 空でない場合のみチェック
+                break;
+            case 5:
+                root = randominput_ui(root);
+                break;
+            default:
+                printf("Invalid choice. Please try again.\n");
+                break;
         }
     }
+
+    // TODO: プログラム終了時に全てのノードを解放する処理 (freeTree関数など) を追加するのが望ましい
+    // freeTree(root);
+    printf("Exiting.\n");
     return 0;
 }
